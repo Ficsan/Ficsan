@@ -2348,40 +2348,40 @@
       }
     }
 
+    function handleQrResult(rawValue) {
+      const isoDate = parseQrDate(rawValue || '');
+      if (!isoDate) return false;
+      stopQrScan();
+      scanModal.classList.remove('show');
+      setEntryValue('date', isoDate);
+      return true;
+    }
+
     async function scanLoop() {
-      if (!scanVideo || scanVideo.readyState < 2) {
+      // Crucial guard: skip frame until video has enough data.
+      if (!scanVideo || scanVideo.readyState < scanVideo.HAVE_ENOUGH_DATA) {
         qrRaf = requestAnimationFrame(scanLoop);
         return;
       }
+
+      qrCanvas.width = scanVideo.videoWidth;
+      qrCanvas.height = scanVideo.videoHeight;
+      qrCanvasCtx.drawImage(scanVideo, 0, 0, qrCanvas.width, qrCanvas.height);
+
       try {
-        let rawValue = null;
         if (qrDetector) {
           const codes = await qrDetector.detect(scanVideo);
           if (codes && codes.length > 0) {
-            rawValue = codes[0].rawValue;
+            if (handleQrResult(codes[0].rawValue)) return;
           }
         } else if (typeof jsQR === 'function' && qrCanvasCtx) {
-          qrCanvas.width = scanVideo.videoWidth;
-          qrCanvas.height = scanVideo.videoHeight;
-          qrCanvasCtx.drawImage(scanVideo, 0, 0, qrCanvas.width, qrCanvas.height);
           const imageData = qrCanvasCtx.getImageData(0, 0, qrCanvas.width, qrCanvas.height);
-          const decoded = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'dontInvert' });
-          if (decoded && decoded.data) {
-            rawValue = decoded.data;
-          }
-        }
-
-        if (rawValue) {
-          const isoDate = parseQrDate(rawValue);
-          if (isoDate) {
-            stopQrScan();
-            scanModal.classList.remove('show');
-            setEntryValue('date', isoDate);
-            return;
-          }
+          const decoded = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
+          if (decoded?.data && handleQrResult(decoded.data)) return;
         }
       } catch (e) {
-        // Continue scanning on transient errors.
+        // Continue scanning even when one frame fails.
+        console.warn('Erreur scan frame:', e);
       }
       qrRaf = requestAnimationFrame(scanLoop);
     }
@@ -2396,7 +2396,18 @@
         return;
       }
       try {
-        qrDetector = ('BarcodeDetector' in window) ? new BarcodeDetector({ formats: ['qr_code', 'data_matrix'] }) : null;
+        qrDetector = null;
+        if ('BarcodeDetector' in window) {
+          const supported = await BarcodeDetector.getSupportedFormats();
+          const supportsQr = supported.includes('qr_code');
+          const supportsDataMatrix = supported.includes('data_matrix');
+          if (supportsQr || supportsDataMatrix) {
+            const wantedFormats = [];
+            if (supportsQr) wantedFormats.push('qr_code');
+            if (supportsDataMatrix) wantedFormats.push('data_matrix');
+            qrDetector = new BarcodeDetector({ formats: wantedFormats });
+          }
+        }
         qrStream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: { ideal: 'environment' } },
           audio: false,
@@ -2526,15 +2537,11 @@
       const file = event.target.files && event.target.files[0];
       if (!file) return;
       const rawValue = await decodeQrFromImageFile(file);
-      const isoDate = parseQrDate(rawValue || '');
-      if (!isoDate) {
+      if (!handleQrResult(rawValue)) {
         alert('Code non trouvé ou format invalide (attendu: BDB24/04/26CG150).');
         scanPhotoInput.value = '';
         return;
       }
-      stopQrScan();
-      scanModal.classList.remove('show');
-      setEntryValue('date', isoDate);
       scanPhotoInput.value = '';
     });
 
