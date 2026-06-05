@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 
 <html lang="fr">
 
@@ -1116,9 +1116,13 @@
 
       <div class="modal-actions" style="margin-top:12px; grid-template-columns: 1fr;">
 
+        <button id="scanPhotoBtn" class="modal-btn">Scanner une photo</button>
+
         <button id="closeScanBtn" class="modal-btn secondary">Fermer</button>
 
       </div>
+
+      <input id="scanPhotoInput" type="file" accept="image/*" style="display:none;" />
 
     </div>
 
@@ -1187,6 +1191,8 @@
     const scanQrBtn = document.getElementById('scanQrBtn');
     const scanModal = document.getElementById('scanModal');
     const scanVideo = document.getElementById('scanVideo');
+    const scanPhotoBtn = document.getElementById('scanPhotoBtn');
+    const scanPhotoInput = document.getElementById('scanPhotoInput');
     const closeScanBtn = document.getElementById('closeScanBtn');
 
     let qrStream = null;
@@ -2405,6 +2411,28 @@
       }
     }
 
+    async function decodeQrFromImageFile(file) {
+      if (!file || !qrCanvasCtx) return null;
+      try {
+        const objectUrl = URL.createObjectURL(file);
+        const img = new Image();
+        img.src = objectUrl;
+        await new Promise((resolve, reject) => {
+          img.onload = resolve;
+          img.onerror = reject;
+        });
+        qrCanvas.width = img.naturalWidth || img.width;
+        qrCanvas.height = img.naturalHeight || img.height;
+        qrCanvasCtx.drawImage(img, 0, 0, qrCanvas.width, qrCanvas.height);
+        const imageData = qrCanvasCtx.getImageData(0, 0, qrCanvas.width, qrCanvas.height);
+        const decoded = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
+        URL.revokeObjectURL(objectUrl);
+        return decoded && decoded.data ? decoded.data : null;
+      } catch (e) {
+        return null;
+      }
+    }
+
     function renderPredictionTable() {
       if (!predictionTable) return;
       const today = new Date();
@@ -2471,6 +2499,26 @@
     });
 
     scanQrBtn.addEventListener('click', startQrScan);
+
+    scanPhotoBtn.addEventListener('click', () => {
+      scanPhotoInput.click();
+    });
+
+    scanPhotoInput.addEventListener('change', async (event) => {
+      const file = event.target.files && event.target.files[0];
+      if (!file) return;
+      const rawValue = await decodeQrFromImageFile(file);
+      const isoDate = parseQrDate(rawValue || '');
+      if (!isoDate) {
+        alert('QR code non trouvé ou format invalide (attendu: BDB24/04/26CG150).');
+        scanPhotoInput.value = '';
+        return;
+      }
+      stopQrScan();
+      scanModal.classList.remove('show');
+      setEntryValue('date', isoDate);
+      scanPhotoInput.value = '';
+    });
 
     closeScanBtn.addEventListener('click', () => {
       stopQrScan();
