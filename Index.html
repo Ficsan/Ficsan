@@ -1130,7 +1130,9 @@
 
 
 
-  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+  <!-- Remplacez la ligne jsQR par : -->
+  <script src="https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/umd/index.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.19.2/umd/index.min.js"></script>
 
   <script>
 
@@ -2358,7 +2360,6 @@
     }
 
     async function scanLoop() {
-      // Crucial guard: skip frame until video has enough data.
       if (!scanVideo || scanVideo.readyState < scanVideo.HAVE_ENOUGH_DATA) {
         qrRaf = requestAnimationFrame(scanLoop);
         return;
@@ -2374,15 +2375,26 @@
           if (codes && codes.length > 0) {
             if (handleQrResult(codes[0].rawValue)) return;
           }
-        } else if (typeof jsQR === 'function' && qrCanvasCtx) {
+        } else {
+          // Fallback ZXing (lit QR + Data Matrix)
           const imageData = qrCanvasCtx.getImageData(0, 0, qrCanvas.width, qrCanvas.height);
-          const decoded = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
-          if (decoded?.data && handleQrResult(decoded.data)) return;
+          const luminanceSource = new ZXing.RGBLuminanceSource(imageData.data, qrCanvas.width, qrCanvas.height);
+          const binaryBitmap = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(luminanceSource));
+          const hints = new Map();
+          hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+            ZXing.BarcodeFormat.QR_CODE,
+            ZXing.BarcodeFormat.DATA_MATRIX
+          ]);
+          hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+          const reader = new ZXing.MultiFormatReader();
+          reader.setHints(hints);
+          const result = reader.decode(binaryBitmap);
+          if (result?.getText() && handleQrResult(result.getText())) return;
         }
       } catch (e) {
-        // Continue scanning even when one frame fails.
-        console.warn('Erreur scan frame:', e);
+        // NotFoundException est normale sur chaque frame sans code
       }
+
       qrRaf = requestAnimationFrame(scanLoop);
     }
 
@@ -2428,31 +2440,40 @@
         const objectUrl = URL.createObjectURL(file);
         const img = new Image();
         img.src = objectUrl;
-        await new Promise((resolve, reject) => {
-          img.onload = resolve;
-          img.onerror = reject;
-        });
+        await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; });
+
         let rawValue = null;
 
-        // Prefer native detector for QR + Data Matrix.
+        // Essai BarcodeDetector natif
         if ('BarcodeDetector' in window) {
-          const imgDetector = new BarcodeDetector({ formats: ['qr_code', 'data_matrix'] });
-          const codes = await imgDetector.detect(img);
-          if (codes && codes.length > 0) {
-            rawValue = codes[0].rawValue || null;
-          }
+          try {
+            const supported = await BarcodeDetector.getSupportedFormats();
+            const formats = ['qr_code', 'data_matrix'].filter(f => supported.includes(f));
+            if (formats.length) {
+              const det = new BarcodeDetector({ formats });
+              const codes = await det.detect(img);
+              if (codes.length > 0) rawValue = codes[0].rawValue;
+            }
+          } catch (_) {}
         }
 
-        // Fallback for classic QR only.
+        // Fallback ZXing
         if (!rawValue) {
           qrCanvas.width = img.naturalWidth || img.width;
           qrCanvas.height = img.naturalHeight || img.height;
           qrCanvasCtx.drawImage(img, 0, 0, qrCanvas.width, qrCanvas.height);
           const imageData = qrCanvasCtx.getImageData(0, 0, qrCanvas.width, qrCanvas.height);
-          const decoded = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
-          if (decoded && decoded.data) {
-            rawValue = decoded.data;
-          }
+          const luminanceSource = new ZXing.RGBLuminanceSource(imageData.data, qrCanvas.width, qrCanvas.height);
+          const binaryBitmap = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(luminanceSource));
+          const hints = new Map();
+          hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+            ZXing.BarcodeFormat.QR_CODE,
+            ZXing.BarcodeFormat.DATA_MATRIX
+          ]);
+          hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+          const reader = new ZXing.MultiFormatReader();
+          reader.setHints(hints);
+          rawValue = new ZXing.MultiFormatReader().decode(binaryBitmap)?.getText() || null;
         }
 
         URL.revokeObjectURL(objectUrl);
